@@ -1,0 +1,113 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Station {
+  id           String   @id @default(uuid())
+  name         String
+  location     String
+  latitude     Float?
+  longitude    Float?
+  active       Boolean  @default(true)
+  lastSeenAt   DateTime?
+  status       String   @default("ONLINE") // ONLINE | OFFLINE
+  createdAt    DateTime @default(now())
+
+  rainfallReadings  Rainfall[]
+  riverLevels       RiverLevel[]
+  alerts            Alert[]
+  subscriptions     Subscription[]
+  thresholds        StationThreshold?
+
+  @@map("stations")
+}
+
+model StationThreshold {
+  id              String   @id @default(uuid())
+  stationId       String   @unique
+  station         Station  @relation(fields: [stationId], references: [id])
+  watchRain       Float    @default(30)
+  warningRain     Float    @default(50)
+  criticalRain    Float    @default(80)
+  watchRiver      Float    @default(2.5)
+  warningRiver    Float    @default(3.5)
+  criticalRiver   Float    @default(4.5)
+  createdAt       DateTime @default(now())
+
+  @@map("station_thresholds")
+}
+
+model Rainfall {
+  id              String   @id @default(uuid())
+  stationId       String
+  station         Station  @relation(fields: [stationId], references: [id])
+  timestamp       DateTime
+  valueMm         Float
+  durationMinutes Int?
+  createdAt       DateTime @default(now())
+
+  @@index([stationId, timestamp(sort: Desc)])
+  @@map("rainfall")
+}
+
+model RiverLevel {
+  id           String   @id @default(uuid())
+  stationId    String
+  station      Station  @relation(fields: [stationId], references: [id])
+  timestamp    DateTime
+  levelM       Float
+  flowRateCms  Float?
+  createdAt    DateTime @default(now())
+
+  @@index([stationId, timestamp(sort: Desc)])
+  @@map("river_levels")
+}
+
+model User {
+  id             String   @id @default(uuid())
+  name           String
+  email          String   @unique
+  phone          String?
+  hashedPassword String
+  role           String   @default("viewer") // viewer | operator | admin
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  subscriptions  Subscription[]
+
+  @@map("users")
+}
+
+model Alert {
+  id         String   @id @default(uuid())
+  stationId  String
+  station    Station  @relation(fields: [stationId], references: [id])
+  severity   String   // NORMAL | WATCH | WARNING | CRITICAL
+  message    String
+  source     String   @default("auto") // auto | manual
+  dispatched Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([stationId, createdAt(sort: Desc)])
+  @@map("alerts")
+}
+
+model Subscription {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  stationId String
+  station   Station  @relation(fields: [stationId], references: [id])
+  severity  String   // minimum severity to notify on
+  channels  String[] // ["sms", "email"]
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("subscriptions")
+}
