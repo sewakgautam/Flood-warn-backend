@@ -23,7 +23,7 @@ const NEPAL_STATIONS = [
 @Injectable()
 export class NepalSyncService implements OnApplicationBootstrap {
   private readonly logger = new Logger(NepalSyncService.name);
-  private readonly dhmUrl = process.env.DHM_URL || 'http://www.dhm.gov.np/hydrological-data/';
+  private readonly dhmUrl = process.env.DHM_URL || 'https://dhm.gov.np/hydrology/river-watch';
 
   constructor(private prisma: PrismaService) {}
 
@@ -88,7 +88,7 @@ export class NepalSyncService implements OnApplicationBootstrap {
       this.logger.log(`Parsed ${rows.length} stations`);
       return rows;
     } catch (err) {
-      this.logger.error('Fetch failed:', err.message);
+      this.logger.error('Fetch failed:', (err as Error).message);
       return [];
     }
   }
@@ -102,7 +102,7 @@ export class NepalSyncService implements OnApplicationBootstrap {
       const values: number[] = data.hourly?.precipitation || [];
       return Math.round(values.reduce((s, v) => s + (v || 0), 0) * 100) / 100;
     } catch (err) {
-      this.logger.error('Rain fetch:', err.message);
+      this.logger.error('Rain fetch:', (err as Error).message);
       return null;
     }
   }
@@ -117,7 +117,7 @@ export class NepalSyncService implements OnApplicationBootstrap {
       const val = values[values.length - 1];
       return val != null ? Math.round(val * 100) / 100 : null;
     } catch (err) {
-      this.logger.error('Discharge fetch:', err.message);
+      this.logger.error('Discharge fetch:', (err as Error).message);
       return null;
     }
   }
@@ -186,7 +186,7 @@ export class NepalSyncService implements OnApplicationBootstrap {
         });
         saved++;
       } catch (e) {
-        this.logger.error(`Skip ${r.stationName}:`, e.message);
+        this.logger.error(`Skip ${r.stationName}:`, (e as Error).message);
       }
     }
     this.logger.log(`Saved ${saved} readings`);
