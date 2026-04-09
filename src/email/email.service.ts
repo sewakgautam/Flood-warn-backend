@@ -8,9 +8,10 @@ export class EmailService {
 
   constructor() {
     this.transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      host: process.env.SMTP_HOST || 'smtp.office365.com',
       port: parseInt(process.env.SMTP_PORT || '587'),
-      secure: process.env.SMTP_SECURE === 'true',
+      secure: false, // Office365 uses STARTTLS on 587, not SSL
+      tls: { ciphers: 'SSLv3' },
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
