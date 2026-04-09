@@ -3,6 +3,8 @@ import { Interval } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 
 const DHM_RIVER_WATCH = 'https://dhm.gov.np/hydrology/river-watch';
+const DHM_RAINFALL_MAP = 'https://dhm.gov.np/hydrology/rainfall-watch-map';
+const DHM_RAINFALL_API = 'https://dhm.gov.np/hydrology/getRainfallFilter';
 
 @Injectable()
 export class NepalSyncService implements OnApplicationBootstrap {
@@ -18,8 +20,11 @@ export class NepalSyncService implements OnApplicationBootstrap {
   async runSync() {
     this.logger.log(`Sync cycle — ${new Date().toISOString()}`);
     try {
-      const stations = await this.fetchStations();
-      this.logger.log(`Found ${stations.length} stations`);
+      const [stations, rainfallMap] = await Promise.all([
+        this.fetchStations(),
+        this.fetchRainfallData(),
+      ]);
+      this.logger.log(`Found ${stations.length} river stations, ${rainfallMap.size} rainfall readings`);
       if (stations.length === 0) {
         this.logger.warn('No stations parsed from DHM page');
         return;
@@ -27,7 +32,9 @@ export class NepalSyncService implements OnApplicationBootstrap {
       let saved = 0;
       for (const s of stations) {
         try {
-          await this.saveStation(s);
+          // match rainfall by dhmId (series_id or id)
+          const rainfallMm = rainfallMap.get(s.dhmId) ?? null;
+          await this.saveStation({ ...s, rainfallMm });
           saved++;
         } catch (e) {
           this.logger.error(`Skip ${s.name}:`, (e as Error).message);
@@ -36,6 +43,53 @@ export class NepalSyncService implements OnApplicationBootstrap {
       this.logger.log(`Sync complete — ${saved}/${stations.length} saved`);
     } catch (err) {
       this.logger.error('Sync failed:', (err as Error).message);
+    }
+  }
+
+  private async fetchRainfallData(): Promise<Map<string, number>> {
+    try {
+      // first get CSRF token
+      const pageRes = await fetch(DHM_RAINFALL_MAP, {
+        signal: AbortSignal.timeout(20000),
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html' },
+      });
+      if (!pageRes.ok) throw new Error(`HTTP ${pageRes.status}`);
+      const html = await pageRes.text();
+      const csrfMatch = html.match(/name="csrf_test_name"\s+value="(\w+)"/);
+      const csrf = csrfMatch?.[1] ?? '';
+      const cookies = pageRes.headers.get('set-cookie') ?? '';
+
+      const formData = new URLSearchParams({ csrf_test_name: csrf, hour: '6' });
+      const apiRes = await fetch(DHM_RAINFALL_API, {
+        method: 'POST',
+        signal: AbortSignal.timeout(20000),
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-Requested-With': 'XMLHttpRequest',
+          'Referer': DHM_RAINFALL_MAP,
+          'Cookie': cookies,
+          'User-Agent': 'Mozilla/5.0',
+        },
+        body: formData.toString(),
+      });
+      if (!apiRes.ok) throw new Error(`Rainfall API HTTP ${apiRes.status}`);
+      const json = await apiRes.json();
+
+      const map = new Map<string, number>();
+      const arr: any[] = Array.isArray(json) ? json
+        : Array.isArray(json?.data) ? json.data
+        : Object.values(json?.data ?? {}).flat() as any[];
+
+      for (const item of arr) {
+        if (item?.id != null && item?.value != null) {
+          map.set(String(item.id), parseFloat(item.value));
+        }
+      }
+      this.logger.log(`Fetched ${map.size} rainfall readings`);
+      return map;
+    } catch (err) {
+      this.logger.warn('Rainfall fetch failed:', (err as Error).message);
+      return new Map();
     }
   }
 
@@ -73,10 +127,11 @@ export class NepalSyncService implements OnApplicationBootstrap {
       }));
   }
 
-  private async saveStation({ dhmId, name, basin, district, lat, lon, waterLevel, warningLevel, dangerLevel }: {
+  private async saveStation({ dhmId, name, basin, district, lat, lon, waterLevel, warningLevel, dangerLevel, rainfallMm }: {
     dhmId: string; name: string; basin: string; district: string;
     lat: number | null; lon: number | null;
     waterLevel: number | null; warningLevel: number | null; dangerLevel: number | null;
+    rainfallMm?: number | null;
   }) {
     const stationId = `DHM-${dhmId}`;
     const location = [basin ? `${basin} Basin` : '', district, 'Nepal'].filter(Boolean).join(', ');
@@ -100,9 +155,15 @@ export class NepalSyncService implements OnApplicationBootstrap {
       },
     });
 
+    const now = new Date();
     if (waterLevel != null && waterLevel > 0 && waterLevel < 9000) {
       await this.prisma.riverLevel.create({
-        data: { stationId, timestamp: new Date(), levelM: waterLevel, flowRateCms: null },
+        data: { stationId, timestamp: now, levelM: waterLevel, flowRateCms: null },
+      });
+    }
+    if (rainfallMm != null && rainfallMm >= 0) {
+      await this.prisma.rainfall.create({
+        data: { stationId, timestamp: now, valueMm: rainfallMm, durationMinutes: 360 },
       });
     }
   }
