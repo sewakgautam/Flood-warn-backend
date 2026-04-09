@@ -7,8 +7,8 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  app.enableCors({ origin: process.env.FRONTEND_URL || '*' });
-  app.setGlobalPrefix('v1', {
+app.enableCors({ origin:['http://localhost:3500','http://frontend:3500','http://104.223.50.140:3500'], credentials:true, });  
+app.setGlobalPrefix('v1', {
     exclude: [{ path: 'health', method: RequestMethod.GET }],
   });
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
@@ -22,7 +22,7 @@ async function bootstrap() {
   SwaggerModule.setup('docs', app, SwaggerModule.createDocument(app, config));
 
   const port = process.env.PORT ?? 8000;
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
   console.log(`FloodWatch API running on port ${port}`);
 }
 
