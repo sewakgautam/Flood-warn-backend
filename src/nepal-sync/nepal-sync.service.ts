@@ -58,9 +58,20 @@ export class NepalSyncService implements OnApplicationBootstrap {
   private async scrapeStationList(browser: Awaited<ReturnType<typeof puppeteer.launch>>) {
     const page = await browser.newPage();
     try {
-      await page.goto(DHM_RIVER_WATCH, { waitUntil: 'networkidle2', timeout: 30000 });
-      // wait for table rows to appear
-      await page.waitForSelector('table tbody tr', { timeout: 15000 });
+      // log intercepted API calls from the SPA for debugging
+      page.on('response', async (response) => {
+        const url = response.url();
+        if (url.includes('api') || url.includes('station') || url.includes('river') || url.includes('hydro')) {
+          const ct = response.headers()['content-type'] || '';
+          if (ct.includes('json')) {
+            this.logger.log(`Intercepted API: ${url}`);
+          }
+        }
+      });
+
+      await page.goto(DHM_RIVER_WATCH, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      // wait for table rows to appear after JS renders
+      await page.waitForSelector('table tbody tr', { timeout: 30000 }).catch(() => {});
 
       const stations = await page.evaluate(() => {
         const rows = Array.from(document.querySelectorAll('table tbody tr'));
@@ -88,7 +99,7 @@ export class NepalSyncService implements OnApplicationBootstrap {
   private async scrapeStationDetail(browser: Awaited<ReturnType<typeof puppeteer.launch>>, dhmId: string) {
     const page = await browser.newPage();
     try {
-      await page.goto(`${DHM_STATION_BASE}/${dhmId}`, { waitUntil: 'networkidle2', timeout: 20000 });
+      await page.goto(`${DHM_STATION_BASE}/${dhmId}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
       const details = await page.evaluate(() => {
         const text = document.body.innerText;
