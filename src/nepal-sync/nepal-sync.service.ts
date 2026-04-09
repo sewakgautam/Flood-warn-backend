@@ -20,35 +20,42 @@ export class NepalSyncService implements OnApplicationBootstrap {
   async runSync() {
     this.logger.log(`Sync cycle — ${new Date().toISOString()}`);
     try {
-      const [stations, rainfallMap] = await Promise.all([
+      const [stations, rainfallStations] = await Promise.all([
         this.fetchStations(),
         this.fetchRainfallData(),
       ]);
-      this.logger.log(`Found ${stations.length} river stations, ${rainfallMap.size} rainfall readings`);
-      if (stations.length === 0) {
-        this.logger.warn('No stations parsed from DHM page');
-        return;
-      }
-      let saved = 0;
+      this.logger.log(`Found ${stations.length} river stations, ${rainfallStations.length} rainfall stations`);
+
+      // save river stations
+      let riverSaved = 0;
       for (const s of stations) {
         try {
-          // match rainfall by dhmId (series_id or id)
-          const rainfallMm = rainfallMap.get(s.dhmId) ?? null;
-          await this.saveStation({ ...s, rainfallMm });
-          saved++;
+          await this.saveStation(s);
+          riverSaved++;
         } catch (e) {
-          this.logger.error(`Skip ${s.name}:`, (e as Error).message);
+          this.logger.error(`Skip river ${s.name}:`, (e as Error).message);
         }
       }
-      this.logger.log(`Sync complete — ${saved}/${stations.length} saved`);
+
+      // save rainfall independently — upsert station then save reading
+      let rainSaved = 0;
+      for (const r of rainfallStations) {
+        try {
+          await this.saveRainfallReading(r);
+          rainSaved++;
+        } catch (e) {
+          this.logger.error(`Skip rain ${r.name}:`, (e as Error).message);
+        }
+      }
+
+      this.logger.log(`Sync complete — river:${riverSaved}/${stations.length} rain:${rainSaved}/${rainfallStations.length}`);
     } catch (err) {
       this.logger.error('Sync failed:', (err as Error).message);
     }
   }
 
-  private async fetchRainfallData(): Promise<Map<string, number>> {
+  private async fetchRainfallData(): Promise<any[]> {
     try {
-      // first get CSRF token
       const pageRes = await fetch(DHM_RAINFALL_MAP, {
         signal: AbortSignal.timeout(20000),
         headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html' },
@@ -75,21 +82,36 @@ export class NepalSyncService implements OnApplicationBootstrap {
       if (!apiRes.ok) throw new Error(`Rainfall API HTTP ${apiRes.status}`);
       const json = await apiRes.json();
 
-      const map = new Map<string, number>();
       const arr: any[] = Array.isArray(json) ? json
         : Array.isArray(json?.data) ? json.data
         : Object.values(json?.data ?? {}).flat() as any[];
 
-      for (const item of arr) {
-        if (item?.id != null && item?.value != null) {
-          map.set(String(item.id), parseFloat(item.value));
-        }
-      }
-      this.logger.log(`Fetched ${map.size} rainfall readings`);
-      return map;
+      this.logger.log(`Fetched ${arr.length} rainfall readings`);
+      return arr.filter(s => s?.id && s?.name);
     } catch (err) {
       this.logger.warn('Rainfall fetch failed:', (err as Error).message);
-      return new Map();
+      return [];
+    }
+  }
+
+  private async saveRainfallReading(s: any) {
+    const stationId = `DHM-${s.id}`;
+    const location = [s.basin ? `${s.basin} Basin` : '', s.district, 'Nepal'].filter(Boolean).join(', ');
+
+    await this.prisma.station.upsert({
+      where: { id: stationId },
+      create: { id: stationId, name: s.name.trim(), location, latitude: s.latitude ?? null, longitude: s.longitude ?? null, status: 'ONLINE', lastSeenAt: new Date() },
+      update: { status: 'ONLINE', lastSeenAt: new Date() },
+    });
+    await this.prisma.stationThreshold.upsert({
+      where: { stationId },
+      create: { stationId },
+      update: {},
+    });
+    if (s.value != null && s.value >= 0) {
+      await this.prisma.rainfall.create({
+        data: { stationId, timestamp: new Date(), valueMm: parseFloat(s.value), durationMinutes: 360 },
+      });
     }
   }
 
@@ -127,11 +149,10 @@ export class NepalSyncService implements OnApplicationBootstrap {
       }));
   }
 
-  private async saveStation({ dhmId, name, basin, district, lat, lon, waterLevel, warningLevel, dangerLevel, rainfallMm }: {
+  private async saveStation({ dhmId, name, basin, district, lat, lon, waterLevel, warningLevel, dangerLevel }: {
     dhmId: string; name: string; basin: string; district: string;
     lat: number | null; lon: number | null;
     waterLevel: number | null; warningLevel: number | null; dangerLevel: number | null;
-    rainfallMm?: number | null;
   }) {
     const stationId = `DHM-${dhmId}`;
     const location = [basin ? `${basin} Basin` : '', district, 'Nepal'].filter(Boolean).join(', ');
@@ -159,11 +180,6 @@ export class NepalSyncService implements OnApplicationBootstrap {
     if (waterLevel != null && waterLevel > 0 && waterLevel < 9000) {
       await this.prisma.riverLevel.create({
         data: { stationId, timestamp: now, levelM: waterLevel, flowRateCms: null },
-      });
-    }
-    if (rainfallMm != null && rainfallMm >= 0) {
-      await this.prisma.rainfall.create({
-        data: { stationId, timestamp: now, valueMm: rainfallMm, durationMinutes: 360 },
       });
     }
   }
