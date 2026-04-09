@@ -19,11 +19,12 @@ model Station {
   status       String   @default("ONLINE") // ONLINE | OFFLINE
   createdAt    DateTime @default(now())
 
-  rainfallReadings  Rainfall[]
-  riverLevels       RiverLevel[]
-  alerts            Alert[]
-  subscriptions     Subscription[]
-  thresholds        StationThreshold?
+  rainfallReadings     Rainfall[]
+  riverLevels          RiverLevel[]
+  alerts               Alert[]
+  subscriptions        Subscription[]
+  publicSubscriptions  PublicSubscription[]
+  thresholds           StationThreshold?
 
   @@map("stations")
 }
@@ -110,4 +111,19 @@ model Subscription {
   createdAt DateTime @default(now())
 
   @@map("subscriptions")
+}
+
+model PublicSubscription {
+  id             String    @id @default(uuid())
+  email          String
+  stationId      String
+  station        Station   @relation(fields: [stationId], references: [id])
+  severity       String    @default("WARNING") // WATCH | WARNING | CRITICAL
+  active         Boolean   @default(true)
+  token          String    @unique @default(uuid())
+  lastAlertedAt  DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@unique([email, stationId])
+  @@map("public_subscriptions")
 }

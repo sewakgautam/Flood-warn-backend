@@ -1,7 +1,20 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { IsEmail, IsIn, IsString } from 'class-validator';
 import { Public } from '../auth/decorators/public.decorator';
 import { PrismaService } from '../prisma/prisma.service';
+import { EmailService } from '../email/email.service';
+
+class SubscribeDto {
+  @IsEmail()
+  email: string;
+
+  @IsString()
+  stationId: string;
+
+  @IsIn(['WATCH', 'WARNING', 'CRITICAL'])
+  severity: string;
+}
 
 const DHM_COORDS: Record<string, { lat: number; lon: number }> = {
   'DHM-35':  { lat: 28.6167, lon: 81.2833 },
@@ -21,10 +34,15 @@ const DHM_COORDS: Record<string, { lat: number; lon: number }> = {
   'DHM-9':   { lat: 27.8833, lon: 85.5500 },
 };
 
+const SEVERITY_ORDER = { NORMAL: 0, WATCH: 1, WARNING: 2, CRITICAL: 3 };
+
 @ApiTags('Public')
 @Controller('public')
 export class PublicController {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private email: EmailService,
+  ) {}
 
   @Public()
   @Get('map-data')
@@ -85,5 +103,92 @@ export class PublicController {
     });
 
     return { stations: data, updatedAt: new Date().toISOString() };
+  }
+
+  @Public()
+  @Get('stations')
+  async listStations() {
+    const stations = await this.prisma.station.findMany({
+      where: { active: true },
+      select: { id: true, name: true, location: true, latitude: true, longitude: true },
+      orderBy: { name: 'asc' },
+    });
+    return stations;
+  }
+
+  @Public()
+  @Post('subscribe')
+  async subscribe(@Body() dto: SubscribeDto) {
+    const station = await this.prisma.station.findUnique({ where: { id: dto.stationId } });
+    if (!station) return { error: 'Station not found' };
+
+    const sub = await this.prisma.publicSubscription.upsert({
+      where: { email_stationId: { email: dto.email, stationId: dto.stationId } },
+      create: { email: dto.email, stationId: dto.stationId, severity: dto.severity, active: true },
+      update: { severity: dto.severity, active: true },
+    });
+
+    await this.email.sendConfirmation({
+      to: dto.email,
+      stationName: station.name,
+      severity: dto.severity,
+      unsubscribeToken: sub.token,
+    });
+
+    return { success: true, message: `Subscribed to ${dto.severity} alerts for ${station.name}` };
+  }
+
+  @Public()
+  @Delete('unsubscribe/:token')
+  async unsubscribe(@Param('token') token: string) {
+    await this.prisma.publicSubscription.updateMany({
+      where: { token },
+      data: { active: false },
+    });
+    return { success: true, message: 'Unsubscribed successfully' };
+  }
+
+  @Public()
+  @Get('unsubscribe/:token')
+  async unsubscribePage(@Param('token') token: string) {
+    await this.prisma.publicSubscription.updateMany({
+      where: { token },
+      data: { active: false },
+    });
+    return { success: true, message: 'You have been unsubscribed from flood alerts.' };
+  }
+
+  /** Called by the scheduler to dispatch alert emails for a station. */
+  async dispatchAlerts(stationId: string, risk: string, riverLevel: number | null, rainfall: number | null) {
+    const riskRank = SEVERITY_ORDER[risk] ?? 0;
+    if (riskRank < SEVERITY_ORDER['WATCH']) return 0;
+
+    const cooldown = new Date(Date.now() - 60 * 60 * 1000); // 1 hour
+
+    const subs = await this.prisma.publicSubscription.findMany({
+      where: {
+        stationId,
+        active: true,
+        OR: [{ lastAlertedAt: null }, { lastAlertedAt: { lt: cooldown } }],
+      },
+      include: { station: { select: { name: true } } },
+    });
+
+    const eligible = subs.filter(s => (SEVERITY_ORDER[s.severity] ?? 0) <= riskRank);
+    for (const sub of eligible) {
+      await this.email.sendAlertEmail({
+        to: sub.email,
+        stationName: sub.station.name,
+        severity: risk,
+        riverLevel,
+        rainfall,
+        unsubscribeToken: sub.token,
+      });
+      await this.prisma.publicSubscription.update({
+        where: { id: sub.id },
+        data: { lastAlertedAt: new Date() },
+      });
+    }
+    return eligible.length;
   }
 }

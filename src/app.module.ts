@@ -17,6 +17,7 @@ import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { PredictModule } from './predict/predict.module';
 import { AdminModule } from './admin/admin.module';
 import { PublicModule } from './public/public.module';
+import { EmailModule } from './email/email.module';
 import { WorkersModule } from './workers/workers.module';
 import { ProcessingModule } from './processing/processing.module';
 
@@ -46,6 +47,7 @@ import { ProcessingModule } from './processing/processing.module';
     PredictModule,
     AdminModule,
     PublicModule,
+    EmailModule,
     WorkersModule,
     ProcessingModule,
   ],
