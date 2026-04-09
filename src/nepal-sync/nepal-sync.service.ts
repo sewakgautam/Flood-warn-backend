@@ -23,7 +23,7 @@ const NEPAL_STATIONS = [
 @Injectable()
 export class NepalSyncService implements OnApplicationBootstrap {
   private readonly logger = new Logger(NepalSyncService.name);
-  private readonly dhmProxyUrl = process.env.DHM_PROXY_URL || 'http://host.docker.internal:9876/dhm-data';
+  private readonly dhmUrl = process.env.DHM_URL || 'http://www.dhm.gov.np/hydrological-data/';
 
   constructor(private prisma: PrismaService) {}
 
@@ -36,7 +36,7 @@ export class NepalSyncService implements OnApplicationBootstrap {
     this.logger.log(`Sync cycle — ${new Date().toISOString()}`);
     const dhmReadings = await this.fetchDHMData();
     if (dhmReadings.length === 0) {
-      this.logger.warn('No DHM data — is proxy running? (node ~/dhm-proxy.js)');
+      this.logger.warn('No DHM data fetched from DHM website');
       return;
     }
     await this.syncAllDHM(dhmReadings);
@@ -49,9 +49,16 @@ export class NepalSyncService implements OnApplicationBootstrap {
   }
 
   private async fetchDHMData() {
-    this.logger.log(`Fetching via proxy: ${this.dhmProxyUrl}`);
+    this.logger.log(`Fetching from DHM: ${this.dhmUrl}`);
     try {
-      const res = await fetch(this.dhmProxyUrl, { signal: AbortSignal.timeout(20000) });
+      const res = await fetch(this.dhmUrl, {
+        signal: AbortSignal.timeout(20000),
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
       if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
       const html = await res.text();
       const rows: any[] = [];
