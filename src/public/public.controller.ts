@@ -163,19 +163,31 @@ export class PublicController {
     const riskRank = SEVERITY_ORDER[risk] ?? 0;
     if (riskRank < SEVERITY_ORDER['WATCH']) return 0;
 
-    const cooldown = new Date(Date.now() - 60 * 60 * 1000); // 1 hour
+    // UTC midnight = start of today
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
 
     const subs = await this.prisma.publicSubscription.findMany({
-      where: {
-        stationId,
-        active: true,
-        OR: [{ lastAlertedAt: null }, { lastAlertedAt: { lt: cooldown } }],
-      },
+      where: { stationId, active: true },
       include: { station: { select: { name: true } } },
     });
 
+    // Only notify subscribers whose threshold is at or below current risk
     const eligible = subs.filter(s => (SEVERITY_ORDER[s.severity] ?? 0) <= riskRank);
+    let sent = 0;
+
     for (const sub of eligible) {
+      const sentToday = sub.lastAlertedAt != null && sub.lastAlertedAt >= todayStart;
+      const lastRank = SEVERITY_ORDER[sub.lastAlertedSeverity ?? 'NORMAL'] ?? 0;
+
+      // Already notified at this exact level today — skip
+      if (sentToday && sub.lastAlertedSeverity === risk) continue;
+
+      // De-escalation: a higher-level alert was already sent today and risk dropped
+      // e.g. sent CRITICAL earlier today, now back to WATCH → "still at risk" email
+      const isDeescalation = sentToday && lastRank > riskRank;
+
+      // Escalation or new day: fall through and send
       await this.email.sendAlertEmail({
         to: sub.email,
         stationName: sub.station.name,
@@ -183,12 +195,14 @@ export class PublicController {
         riverLevel,
         rainfall,
         unsubscribeToken: sub.token,
+        isDeescalation,
       });
       await this.prisma.publicSubscription.update({
         where: { id: sub.id },
-        data: { lastAlertedAt: new Date() },
+        data: { lastAlertedAt: new Date(), lastAlertedSeverity: risk },
       });
+      sent++;
     }
-    return eligible.length;
+    return sent;
   }
 }

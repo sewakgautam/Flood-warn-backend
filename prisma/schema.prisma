@@ -114,15 +114,16 @@ model Subscription {
 }
 
 model PublicSubscription {
-  id             String    @id @default(uuid())
-  email          String
-  stationId      String
-  station        Station   @relation(fields: [stationId], references: [id])
-  severity       String    @default("WARNING") // WATCH | WARNING | CRITICAL
-  active         Boolean   @default(true)
-  token          String    @unique @default(uuid())
-  lastAlertedAt  DateTime?
-  createdAt      DateTime  @default(now())
+  id                  String    @id @default(uuid())
+  email               String
+  stationId           String
+  station             Station   @relation(fields: [stationId], references: [id])
+  severity            String    @default("WARNING") // WATCH | WARNING | CRITICAL
+  active              Boolean   @default(true)
+  token               String    @unique @default(uuid())
+  lastAlertedAt       DateTime?
+  lastAlertedSeverity String?   // Severity of the last sent alert (for smart daily throttle)
+  createdAt           DateTime  @default(now())
 
   @@unique([email, stationId])
   @@map("public_subscriptions")
