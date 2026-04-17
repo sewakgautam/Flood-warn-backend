@@ -69,13 +69,35 @@ export class PublicController {
 
       let risk = 'NORMAL';
       if (latestAlert) {
+        // Manual alert from operator always takes priority
         risk = latestAlert.severity;
-      } else if (latestRiver || latestRainfall) {
-        const river = latestRiver?.levelM ?? 0;
-        const rain = latestRainfall?.valueMm ?? 0;
-        if (river >= thresholds.criticalRiver || rain >= thresholds.criticalRain) risk = 'CRITICAL';
-        else if (river >= thresholds.warningRiver || rain >= thresholds.warningRain) risk = 'WARNING';
-        else if (river >= thresholds.watchRiver || rain >= thresholds.watchRain) risk = 'WATCH';
+      } else {
+        // DHM's own status is the primary source of truth for river risk.
+        // It already accounts for each river's actual warning/danger levels.
+        const dhm = (s.dhmStatus ?? '').toUpperCase();
+        if      (dhm.includes('ABOVE DANGER')   || (dhm.includes('DANGER')   && !dhm.includes('BELOW'))) risk = 'CRITICAL';
+        else if (dhm.includes('ABOVE WARNING')  || (dhm.includes('WARNING')  && !dhm.includes('BELOW'))) risk = 'WARNING';
+        else if (dhm.includes('BELOW WARNING')  || dhm.includes('NORMAL'))                               risk = 'NORMAL';
+
+        // On top of DHM river status, check rainfall against thresholds independently
+        if (latestRainfall) {
+          const rain = latestRainfall.valueMm ?? 0;
+          const t    = thresholds;
+          if      (rain >= t.criticalRain && risk !== 'CRITICAL')                          risk = 'CRITICAL';
+          else if (rain >= t.warningRain  && risk !== 'CRITICAL' && risk !== 'WARNING')    risk = 'WARNING';
+          else if (rain >= t.watchRain    && risk === 'NORMAL')                            risk = 'WATCH';
+        }
+
+        // If DHM has no status for this station, fall back to threshold comparison.
+        // Only use a river threshold if it forms a valid ascending chain.
+        if (!dhm && latestRiver) {
+          const river = latestRiver.levelM ?? 0;
+          const critRiverValid = thresholds.criticalRiver > thresholds.warningRiver;
+          const warnRiverValid = thresholds.warningRiver  > thresholds.watchRiver;
+          if      (critRiverValid && river >= thresholds.criticalRiver) risk = 'CRITICAL';
+          else if (warnRiverValid && river >= thresholds.warningRiver)  risk = 'WARNING';
+          else if (                  river >= thresholds.watchRiver)    risk = 'WATCH';
+        }
       }
 
       const fallback = DHM_COORDS[s.id];
@@ -85,7 +107,9 @@ export class PublicController {
         location: s.location,
         latitude: s.latitude ?? fallback?.lat ?? null,
         longitude: s.longitude ?? fallback?.lon ?? null,
+        elevation: s.elevation ?? null,
         status: s.status,
+        trend: s.trend ?? null,
         lastSeenAt: s.lastSeenAt,
         risk,
         riverLevel: latestRiver

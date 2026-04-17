@@ -14,9 +14,12 @@ model Station {
   location     String
   latitude     Float?
   longitude    Float?
+  elevation    Float?   // Station base elevation MASL (from DHM)
   active       Boolean  @default(true)
   lastSeenAt   DateTime?
   status       String   @default("ONLINE") // ONLINE | OFFLINE
+  trend        String?  // RISING | FALLING | STEADY (from DHM steady field)
+  dhmStatus    String?  // DHM's own status string e.g. "BELOW WARNING LEVEL"
   createdAt    DateTime @default(now())
 
   rainfallReadings     Rainfall[]
